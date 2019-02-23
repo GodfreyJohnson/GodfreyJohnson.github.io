@@ -1,0 +1,90 @@
+---
+layout: post
+title: 训练自己的首个机器学习模型
+date: 2019-02-23 19:26:24.000000000 +08:00
+categories: [kaggle, ML, model]
+---
+
+原文地址：https://www.kaggle.com/dansbecker/your-first-machine-learning-model
+
+## 选择数据与字段
+
+在实际生产中，面临的情况往往是，数据千千万，而我们想要的则是其中最为重要、且对模型影响最为深远的关键数据，因此需要通过合理的选择字段来完成模型的训练。
+
+简而语之，选择字段即为选择模型特征，若字段选择不合适，训练出的模型效果就大打折扣了。
+
+在对DataFrame进行操作时，我们可以通过columns来对数据的所有字段进行查看，并通过dropna对值为空的数据进行清洗。
+
+```python
+import pandas as pd
+
+melbourne_file_path = '../input/melbourne-housing-snapshot/melb_data.csv'
+melbourne_data = pd.read_csv(melbourne_file_path) 
+melbourne_data.columns
+melbourne_data = melbourne_data.dropna(axis=0)
+```
+
+## 选择待预测的字段
+
+选择待待预测的目标字段，只需要在DataFrame后加点（.）和对应字段名称即可。比如选择房价作为预测目标，可以以如下方式表示：
+
+```python
+y = melbourne_data.Price
+
+```
+
+## 选择特征
+
+上文中被选择字段对应的数据，可以视为模型的特征。它们将会作为模型输入，并对房价进行预测，这会在后文进行详细讨论。
+
+接下来，我们选择一些字段，得到对应的特征数据**X**：
+
+```python
+melbourne_features = ['Rooms', 'Bathroom', 'Landsize', 'Lattitude', 'Longtitude']
+
+X = melbourne_data[melbourne_features]
+```
+
+在得到特征数据后，我们通过describe与head方法来简单浏览下数据是否合理。这一步对接下来的模型训练而言，至关重要，需要养成良好的习惯。
+
+```python
+X.describe()
+X.head()
+```
+
+## 训练模型
+
+重头戏终于上场。大家一般会选择**scikit-learn**工具进行模型训练，特别适用于数据存储于DataFrame的模型训练。
+
+训练与使用模型的具体步骤如下：
+
+- 定义：模型将会是哪种类型？如决策树。
+- 拟合：从数据捕捉到究竟是什么模式，这是所有步骤中最重要的部分。
+- 预测：根据模型进行预测。
+- 评估：判断模型预测的准确度如何。
+
+如下是定义模型为决策树，并通过scikit-learn进行拟合的过程：
+```python
+from sklearn.tree import DecisionTreeRegressor
+
+melbourne_model = DecisionTreeRegressor(random_state=1)
+
+melbourne_model.fit(X, y)
+```
+random_state : 随机种子，为另外一个参数splitter服务的。如果splitter=random，那么在对同一组数据做两次预测的时候，
+会有可能造成决策树不一样（很可能），其原因是使用了不同的随机种子(random_state)，所以如果一直记录下来随机种子值并一直使用该值的话，
+就不会出现多次预测结果不一样的问题。
+
+在得到模型后，便可以使用模型进行预测。一般会用模型来对新房子进行预测其价格，这里会选用刚才训练的数据**X**，先进行预测。
+
+```python
+print("Making predictions for the following 5 houses:")
+print(X.head())
+print("The predictions are")
+print(melbourne_model.predict(X.head()))
+```
+
+本节对如何训练自己的首个模型进行了说明，下节会对模型验证进行详细介绍。
+
+
+
