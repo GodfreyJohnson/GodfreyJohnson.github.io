@@ -17,7 +17,7 @@ categories: [kaggle, ML, model, underfitting, overfitting]
 
 以前面章节介绍的决策树模型而言，分隔节点决定了树的深度，同时也决定了预测的走向，如下图所求。
 
-![DecesionTree](../assets/images/DecesionTree.png)
+![DecesionTree](../../../assets/images/DecesionTree.png)
 
 在实际生产中，不太可能在最顶层的节点便出现10个分隔节点。相反，随着层级的深入，数据集不断被分割成叶子节点。经过顶层，分为2个叶子节点，
 经过2层后分成4个叶子节点，N层后分成2的N次方个叶子节点。当层级足够多时，每个叶子节点上只会分配到少数房子。
@@ -30,7 +30,7 @@ categories: [kaggle, ML, model, underfitting, overfitting]
 
 既然我们在模型验证时，关心的是MAE指标，我们需要找到模型训练的甜区，同时避免过拟合与欠拟合的发生。如下图所示：
 
-![FitAndError](../assets/images/fitanderror.png)
+![FitAndError](../../../assets/images/fitanderror.png)
 
 通过控制max_leaf_nodes参数，可以得到不同的模型效果。
 
