@@ -62,4 +62,4 @@ val_predictions = melbourne_model.predict(val_X)
 print(mean_absolute_error(val_y, val_predictions))
 ```
 
-在带大家了解如何进行模型验证之后，后面再给大家具体介绍如何逐步改善模型。
+在带大家了解如何进行模型验证之后，后面再给大家具体介绍过拟合与欠拟合。

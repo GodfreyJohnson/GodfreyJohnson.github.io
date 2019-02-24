@@ -1,0 +1,63 @@
+---
+layout: post
+title: 欠拟合与过拟合
+date: 2019-02-24 15:20:24.000000000 +08:00
+categories: [kaggle, ML, model, underfitting, overfitting]
+---
+
+原文地址：https://www.kaggle.com/dansbecker/underfitting-and-overfitting
+
+在上一节中，我们介绍了[模型验证](http://godfreyjohnson.github.io/2019/02/Kaggel-%E6%A8%A1%E5%9E%8B%E9%AA%8C%E8%AF%81/)。
+
+本节将着重介绍欠拟合与过拟合这两个概念，以此来保证训练得到模型更加准确。
+
+## 使用不同模型
+
+既然已经掌握了如何去评估模型效果，那便可以训练不同的模型，再选取其中效果最好的投入使用。
+
+以前面章节介绍的决策树模型而言，分隔节点决定了树的深度，同时也决定了预测的走向，如下图所求。
+
+![DecesionTree](../assets/images/DecesionTree.png)
+
+在实际生产中，不太可能在最顶层的节点便出现10个分隔节点。相反，随着层级的深入，数据集不断被分割成叶子节点。经过顶层，分为2个叶子节点，
+经过2层后分成4个叶子节点，N层后分成2的N次方个叶子节点。当层级足够多时，每个叶子节点上只会分配到少数房子。
+
+这样会让预测的价格与实际价格非常接近，但同时也会对新数据的预测变得非常不准确，因为每个节点上只分配到了很少的房子，
+即每个节点的训练数据量有限。这样的现象我们称为过拟合，这样得到的模型，对训练数据匹配程度非常高，但对于新数据预测就大失水准。
+
+欠拟合则处于另外一个极端，决策树级别少，每个叶子节点分配大量数据，导致预测结果不尽如人意，即使对训练数据进行测试，效果也不会特别让人满意。
+这往往是因为缺少了关键特征所致，此即为欠拟合。
+
+既然我们在模型验证时，关心的是MAE指标，我们需要找到模型训练的甜区，同时避免过拟合与欠拟合的发生。如下图所示：
+
+![FitAndError](../assets/images/fitanderror.png)
+
+通过控制max_leaf_nodes参数，可以得到不同的模型效果。
+
+```python
+from sklearn.metrics import mean_absolute_error
+from sklearn.tree import DecisionTreeRegressor
+
+def get_mae(max_leaf_nodes, train_X, val_X, train_y, val_y):
+    model = DecisionTreeRegressor(max_leaf_nodes=max_leaf_nodes, random_state=0)
+    model.fit(train_X, train_y)
+    preds_val = model.predict(val_X)
+    mae = mean_absolute_error(val_y, preds_val)
+    return(mae)
+    
+for max_leaf_nodes in [5, 50, 500, 5000]:
+    my_mae = get_mae(max_leaf_nodes, train_X, val_X, train_y, val_y)
+    print("Max leaf nodes: %d  \t\t Mean Absolute Error:  %d" %(max_leaf_nodes, my_mae))
+    
+##输出结果如下
+Max leaf nodes: 5  		     Mean Absolute Error:  347380
+Max leaf nodes: 50  		 Mean Absolute Error:  258171
+Max leaf nodes: 500  		 Mean Absolute Error:  243495
+Max leaf nodes: 5000  		 Mean Absolute Error:  254983
+```
+
+## 总结
+过拟合：得到的模型过于细化，不适用于实际生产的新数据；
+欠拟合：模型没有捕获关键特征与模式，预测结果往往不准确。
+
+下一节将介绍模型的优化。
