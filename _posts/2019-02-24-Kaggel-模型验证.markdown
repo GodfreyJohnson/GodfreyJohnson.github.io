@@ -1,0 +1,65 @@
+---
+layout: post
+title: 模型验证
+date: 2019-02-24 13:50:24.000000000 +08:00
+categories: [kaggle, ML, model, validation]
+---
+
+原文地址：https://www.kaggle.com/dansbecker/model-validation
+
+在上一节中，我们介绍了[如何训练得到一个属于自己的模型](http://godfreyjohnson.github.io/2019/02/Kaggel-%E8%AE%AD%E7%BB%83%E8%87%AA%E5%B7%B1%E7%9A%84%E7%AC%AC%E4%B8%80%E4%B8%AA%E6%9C%BA%E5%99%A8%E5%AD%A6%E4%B9%A0%E6%A8%A1%E5%9E%8B/)。
+
+但得到模型之后，我们需要了解这个模型的效果究竟如何，这便是本节要重点介绍的内容。
+
+## 何谓模型验证
+
+模型的好坏通常由两个指标决定：一个是模型预测得到的值，另外一个是被预测目标的实际值。此两者越接近，则说明模型效果越好。因此模型预测的准确性是衡量模型的重要指标。
+
+许多同学在模型准确性验证上存在一个很大的误解：他们会用训练的数据来对模型进行测试与评估，即先用训练数据得到模型，再用训练数据通过模型进行预测，再用预测数据与训练数据进行对比，
+以此来验证模型的准确性。接下来我们会以案例，详细说明这么做会带来什么问题。
+ 
+首先我们需要对模型通过指标对其质量进行概括。如总共预测与实际分别有10,000条数据，需要逐条进行对比，并且对比结果有好有坏，很容易让人头昏脑胀，毫无头绪。因此我们需要以指标对模型质量进行反映。
+
+其实有许多指标都可以达到反映模型质量的效果，如MAE（Mean Absolute Error，平均绝对误差）。如房价实际值为$15,000，但预测值为$10,000。则误差为5,000。
+
+```
+error = actual - pridicted
+```
+在计算出误差后，我们会取其绝对值，保证其为正数。再对每个误差值取平均，即为MAE。接着[上文](http://godfreyjohnson.github.io/2019/02/Kaggel-%E8%AE%AD%E7%BB%83%E8%87%AA%E5%B7%B1%E7%9A%84%E7%AC%AC%E4%B8%80%E4%B8%AA%E6%9C%BA%E5%99%A8%E5%AD%A6%E4%B9%A0%E6%A8%A1%E5%9E%8B/)的代码。
+
+```python
+from sklearn.metrics import mean_absolute_error
+
+predicted_home_prices = melbourne_model.predict(X)
+mean_absolute_error(y, predicted_home_prices)
+```
+
+## 以训练数据进行验证带来的问题
+
+上面就是以训练数据为例，对模型进行验证的步骤。那为何训练数据达不到验证模型的效果呢？
+
+举例来说，在房地产市场中，房门的颜色往往和价格并没有太大关联，若颜色被选中作为特征进行模型的构建，恰巧红门的很贵，那将来所有有红门的房子的价格都会被预测得偏高。
+
+因此，用训练数据对模型进行测试，效果都会很好。但一旦使用新的、未训练的数据进行测试，模型效果可能就不太如人意了。
+
+总而言之，模型验证需要以新数据进行测试。最直接的方式，可以拿到训练数据后，保留其中1/10作为测试数据，其余9/10则用于训练模型，得到模型后，再用测试数据进行验证。
+
+## 编码
+
+在实际编码中，可以通过sklearn中的train_test_split方法对数据进行分割，其中部分用于模型训练，另外的用于测试与计算MAE。
+
+```python
+from sklearn.model_selection import train_test_split
+
+train_X, val_X, train_y, val_y = train_test_split(X, y, random_state = 0)
+
+melbourne_model = DecisionTreeRegressor()
+
+melbourne_model = melbourne_model.fit(train_X, train_y)
+
+val_predictions = melbourne_model.predict(val_X)
+
+print(mean_absolute_error(val_y, val_predictions))
+```
+
+在带大家了解如何进行模型验证之后，后面再给大家具体介绍如何逐步改善模型。
