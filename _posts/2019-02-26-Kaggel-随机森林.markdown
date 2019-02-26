@@ -1,0 +1,35 @@
+---
+layout: post
+title: 随机森林
+date: 2019-02-26 19:00:24.000000000 +08:00
+categories: [kaggle, ML, model, random forest]
+---
+
+原文地址：https://www.kaggle.com/dansbecker/random-forests
+
+对于[上节](http://godfreyjohnson.github.io/2019/02/Kaggel-%E6%AC%A0%E6%8B%9F%E5%90%88%E4%B8%8E%E8%BF%87%E6%8B%9F%E5%90%88/)
+介绍的过拟合和欠拟合，即使是许多成熟的模型都表现得不并不是如此让人满意。但有些模型却能机智的解决这个问题，
+如接下来要介绍的随机森林。
+
+随机森林中其实包含多颗树，它会取这多颗树的预测值的平均数作为结果。因此它相对于单颗决策树而言，也
+有着更好的精准度，即使是在默认参数情况下，表现也不赖。
+
+若一直保持着模型的训练，那效果可能会更好。但其中许多树对正确参数还是挺敏感的。
+
+# Example
+这回我们采用**RandomForestRegressor**来代替之前的**DecisionTreeRegressor**。
+
+```python
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error
+
+forest_model = RandomForestRegressor(random_state=1)
+forest_model.fit(train_X, train_y)
+melb_preds = forest_model.predict(val_X)
+print(mean_absolute_error(val_y, melb_preds))
+```
+
+从结果来看，随机森林的MAE：20,288较之于决策树的250,000还是有了长足的进步。其实随机森林可以通过调整参数，来达到更优的效果。
+但它最大的好处就是不怎么需要进行人工调优，也会有不错的效果。
+
+接下来会介绍**XGBoost**模型，如果参数调整的好，可以达到令人惊叹的效果。
