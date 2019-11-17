@@ -1,0 +1,17 @@
+---
+layout: post
+title: 神经网络的学习
+date: 2019-11-17 20:00:24.000000000 +08:00
+categories: [deep learning, ML, 神经网络]
+---
+
+原文：深度学习入门-第4章-神经网络的学习
+
+源码：https://github.com/oreilly-japan/deep-learning-from-scratch
+
+# 从数据中学习
+
+- 难点：如何让机器和人一样自动识别5这个手写的数字？
+- 方案：
+    - 机器学习：先撮特征量（SIFT/SURF/HOG），再将转换后的向量，通过SVM/KNN等分类器进行机器学习。 
+    - 深度学习：直接从原始数据中获得目标结果输出。优点是，所有的问题可以用相同的流程进行解决。
