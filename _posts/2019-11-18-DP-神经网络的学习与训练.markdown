@@ -23,8 +23,16 @@ categories: [deep learning, ML, 神经网络]
 采用梯度下降的方式，输出的曲线是波动的，可能只能找到局部最优，不能找到全局最优，还有可能学习速率特别慢，所以一般也不会采用。
 
 ## 交叉熵误差
-
 - 公式：对预测值取对数，乘以正确值，再对向量中的每个求和，再取负。
-![](./img/crossentropyerror.svg)
+![crossentropyerror](./img/crossentropyerror.svg)
 - 优点：本身是凸函数，所以有很好的收敛性，不像均方差只获取局部最优。
-![](./img/crossgraph.jpg)
+![crossgraph](./img/crossgraph.jpg)
+
+## mini batch
+当数据量太大的时候，不可能将所有数据都进行误差的统计，这样会非常耗时，因此会采用抽样的方式对模型进行验证。
+
+```
+np.random.choice(60000, 10)
+```
+
+随机从0-59999取10个索引，再对其进行交叉熵误差的处理。
