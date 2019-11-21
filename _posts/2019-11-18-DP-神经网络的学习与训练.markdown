@@ -32,8 +32,7 @@ categories: [deep learning, ML, 神经网络]
 - Error to Bias：代表着算法的拟合能力，具体为预测值与真实值的距离的期望，通过建立多个模型来估计这个误差期望值。
 - Error to Variance：代表算法的鲁棒性，具体为预测值与真实值的方差。
 
-#![biasandvar](img/biasandvariance.jpg)
-<img src="img/biasandvariance.jpg" />
+<img src="/assets/images/biasandvariance.jpg" />
 
 举例而言，机器学习的过程类似于打靶。Bias反映的是朝着靶心瞄得准不准，靶心为真实值，如果靶心都瞄得不准，效果肯定很差，表现为欠拟合现象。Variance反映的是子弹瞄准打出去后，效果怎么样，如果每一次预测时离靶心都偏离较大，说明模型只对训练数据效果好，对新数据表现很差，表现为过拟合现象。
 
@@ -45,9 +44,9 @@ categories: [deep learning, ML, 神经网络]
 
 ## 交叉熵误差
 - 公式：对预测值取对数，乘以正确值，再对向量中的每个求和，再取负。
-![crossentropyerror](img/crossentropyerror.svg)
+<img src="/assets/images/crossentropyerror.jpg" />
 - 优点：本身是凸函数，所以有很好的收敛性，不像均方差只获取局部最优。
-![crossgraph](img/crossgraph.jpg)
+<img src="/assets/images/crossgraph.jpg" />
 
 ## mini batch
 当数据量太大的时候，不可能将所有数据都进行误差的统计，这样会非常耗时，因此会采用抽样的方式对模型进行验证。
