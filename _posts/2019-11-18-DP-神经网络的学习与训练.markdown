@@ -32,7 +32,8 @@ categories: [deep learning, ML, 神经网络]
 - Error to Bias：代表着算法的拟合能力，具体为预测值与真实值的距离的期望，通过建立多个模型来估计这个误差期望值。
 - Error to Variance：代表算法的鲁棒性，具体为预测值与真实值的方差。
 
-![biasandvar](img/biasandvariance.jpg)
+#![biasandvar](img/biasandvariance.jpg)
+<img src="img/biasandvariance.jpg" />
 
 举例而言，机器学习的过程类似于打靶。Bias反映的是朝着靶心瞄得准不准，靶心为真实值，如果靶心都瞄得不准，效果肯定很差，表现为欠拟合现象。Variance反映的是子弹瞄准打出去后，效果怎么样，如果每一次预测时离靶心都偏离较大，说明模型只对训练数据效果好，对新数据表现很差，表现为过拟合现象。
 
