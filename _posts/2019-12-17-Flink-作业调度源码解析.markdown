@@ -1,0 +1,151 @@
+---
+layout: post
+title: Flink作业调度
+date: 2019-12-18 10:00:24.000000000 +08:00
+categories: [flink, scheduler, 作业调度]
+---
+
+Flink作业调度，总体而言包括以下几个部分：Task的切分、Task的分配和Task的运行。
+这几个步骤包含了Flink Job调度的完整流程，接下来进行详细介绍。
+
+# Task的切分
+
+首先需要明白存在的切分类型。
+- 纵向切分：用户的不同操作(map/reduce)，会对数据进行不同的处理，同时会被包装成不同的Operator，
+每条数据都是从上到下流过整个DataFlow，因此会很自然的通过Operator进行纵向切分，
+分成许多不同的Operator再分别进行处理，其中也通过Operator Chain的优化对整个DataFlow进行优化。
+- 横向切分：分布式计算场景下，用户可以指定并行度来将数据分到不同节点进行处理，
+提高大数据场景下处理的能力，同时在数据增加时，可以更加方便的进行资源的扩展，其实现是通过Slot完成资源的分配。
+<img src="/assets/images/flinktaskschains.svg" />
+
+## 纵向切分-Operator Chain
+为什么要将多个Operator包装成一个Operator Chain呢？我们都知道Flink是对每个Operator都有一个单独的线程进行执行。
+如上一个Task完成，需要切换到运行下一个Task的线程。Operator Chain的优化则可以带来以下好处：
+- 减少线程之间的切换
+- 数据在同一个线程中进行共享
+- 提高吞吐量
+
+如何判断是否需要进行Operator Chain整合呢？可以通过下图中了解其具体的标准
+<img src="/assets/images/flinkoperatorchain.png" />
+
+## 横向切分-Slot
+同一个TaskManager上有多个Slot的好处：
+- 共享TCP连接和心跳
+- 共享数据和数据结构
+
+Slot中有整个Pipeline的好处：
+- slot数量即为最高并行度，不需要再计算究竟有多少Task
+- 有效提高资源利用率，如多个operator在同一个线程中完成
+
+## sharedSlotGroup
+用户可以自由打开和关闭chaining，也可以指定从哪个Transformation开始进行Chaining操作，自由度很大。
+- sharedSlotGroup： 用户指定相同sharedslotgroup的Task会在同一个slot当中
+- colocationGroup：相同index的Task会在同一个slot中
+- AlloctedSlot：由JM向RM申请Slot资源，RM将指定的TM分配给JM，此TM会向JM注册，此为AllocatedSlot
+- Slot：资源调度的最小单元，是在AllocatedSlot基础上，再加上一些字段，如这个Slot执行什么内容，或者状态等
+- SimpleSlot：只负责一个Task的运行
+- SharedSlot：可以包含多个SimpleSlot，对应多个Task
+- SlotSharingGroupAssignment：用于管理许多SharedSlots，其中的allSlots变量用于保存所有SharedSlot，
+availableSlotsPerJid用于记录JobVertexID与ResourceID的对应关系
+
+# Task的分配
+上文介绍了Slot的相关概念，此节则是需要通过调度，为Task分配具体的Slot，核心函数为getSlotForTask。
+调度逻辑是优先为JobVertex分配想要的Slot，没有想要的就随机分配Slot，可以local也可以是non-local。
+其中Instance对应TaskManager。
+```java
+SimpleSlot getSlotForTask(JobVertexID vertexID, Iterable<Instance> locationPreferences) {
+		synchronized (lock) {
+			Pair<SharedSlot, Locality> p = getSlotForTaskInternal(vertexID, locationPreferences, false);
+
+			if (p != null) {
+				SharedSlot ss = p.getLeft();
+				SimpleSlot slot = ss.allocateSubSlot(vertexID);
+				slot.setLocality(p.getRight());
+				return slot;
+			} else {
+				return null;
+			}
+		}
+	}
+
+private SimpleSlot addSharedSlotAndAllocateSubSlot(
+            SharedSlot sharedSlot, Locality locality, JobVertexID groupId, CoLocationConstraint constraint) {
+
+        final ResourceID location = sharedSlot.getTaskManagerID();
+
+        synchronized (lock) {
+            
+            SimpleSlot subSlot;
+            AbstractID groupIdForMap;
+            
+            // add to the total bookkeeping
+            if (!allSlots.add(sharedSlot)) { //加到allSlots中
+                throw new IllegalArgumentException("Slot was already contained in the assignment group");
+            }
+                    
+            if (constraint == null) {
+                // allocate us a sub slot to return
+                subSlot = sharedSlot.allocateSubSlot(groupId); //简单的allocate一个simpleSlot
+                groupIdForMap = groupId;
+            }
+            else { //如果有CoLocationConstraint
+                
+            }
+            
+            if (subSlot != null) {
+                // preserve the locality information
+                subSlot.setLocality(locality);
+                
+                // let the other groups know that this slot exists and that they
+                // can place a task into this slot.
+                boolean entryForNewJidExists = false;
+                
+                for (Map.Entry<AbstractID, Map<ResourceID, List<SharedSlot>>> entry : availableSlotsPerJid.entrySet()) {
+                    // there is already an entry for this groupID
+                    if (entry.getKey().equals(groupIdForMap)) {
+                        entryForNewJidExists = true;
+                        continue;
+                    }
+
+                    Map<ResourceID, List<SharedSlot>> available = entry.getValue();
+                    putIntoMultiMap(available, location, sharedSlot); //对于其他的jobVertex，把sharedSlot加上去
+                }
+
+                // make sure an empty entry exists for this group, if no other entry exists
+                if (!entryForNewJidExists) { //如果存在参数中的groupId，那么就把它的slot信息清空
+                    availableSlotsPerJid.put(groupIdForMap, new LinkedHashMap<ResourceID, List<SharedSlot>>());
+                }
+
+                return subSlot;
+            }
+        }
+        // end synchronized (lock)
+    }
+```
+
+## Slot分配具体过程
+Flink调度包含两个重要的原则：
+- 同一个Operator的各个Subtask不能处于同一个SharedSlot，如FlatMap[1]和FlatMap[2]是不能在同一个SharedSlot中的
+- Flink分配Slot是按照拓扑排序从Source到Sink进行的。
+例如WordCount（Source并行度为1，其他并行度为2），那么调度的顺序依次是：Source -> FlatMap[1] -> FlatMap[2] -> KeyAgg->Sink[1] -> KeyAgg->Sink[2]。假设现在有2个TaskManager，每个只有1个slot（为简化问题），那么分配slot的过程如图所示：
+<img src="/assets/images/flinksharedslot.png" />
+
+- 为Source分配slot。首先，我们从TaskManager1中分配出一个SharedSlot。并从SharedSlot中为Source分配出一个SimpleSlot。如上图中的①和②。
+- 为FlatMap[1]分配slot。目前已经有一个SharedSlot，则从该SharedSlot中分配出一个SimpleSlot用来部署FlatMap[1]。如上图中的③。
+- 为FlatMap[2]分配slot。由于TaskManager1的SharedSlot中已经有同operator的FlatMap[1]了，我们只能分配到其他SharedSlot中去。从TaskManager2中分配出一个SharedSlot，并从该SharedSlot中为FlatMap[2]分配出一个SimpleSlot。如上图的④和⑤。
+- 为Key->Sink[1]分配slot。目前两个SharedSlot都符合条件，从TaskManager1的SharedSlot中分配出一个SimpleSlot用来部署Key->Sink[1]。如上图中的⑥。
+- 为Key->Sink[2]分配slot。TaskManager1的SharedSlot中已经有同operator的Key->Sink[1]了，则只能选择另一个SharedSlot中分配出一个SimpleSlot用来部署Key->Sink[2]。如上图中的⑦。
+
+## JobManager组件
+
+
+# Task的运行
+## Task启动与状态管理
+## 数据如何交互
+
+参考
+- https://ci.apache.org/projects/flink/flink-docs-release-1.9/internals/job_scheduling.html
+- https://clay4444.github.io/posts/149d881d/
+- http://wuchong.me/blog/2016/05/09/flink-internals-understanding-execution-resources/
+- Slot类型：https://www.cnblogs.com/fxjwind/p/6703312.html
+- Slot分配：https://zhuanlan.zhihu.com/p/36525639
