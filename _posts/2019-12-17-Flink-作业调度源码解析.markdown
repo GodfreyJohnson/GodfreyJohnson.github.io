@@ -19,6 +19,7 @@ Flink作业调度，总体而言包括以下几个部分：Task的切分、Task�
 <img src="/assets/images/flinktaskschains.svg" />
 
 ## 纵向切分-Operator Chain
+
 为什么要将多个Operator包装成一个Operator Chain呢？我们都知道Flink是对每个Operator都有一个单独的线程进行执行。
 如上一个Task完成，需要切换到运行下一个Task的线程。Operator Chain的优化则可以带来以下好处：
 - 减少线程之间的切换
@@ -29,6 +30,7 @@ Flink作业调度，总体而言包括以下几个部分：Task的切分、Task�
 <img src="/assets/images/flinkoperatorchain.png" />
 
 ## 横向切分-Slot
+
 同一个TaskManager上有多个Slot的好处：
 - 共享TCP连接和心跳
 - 共享数据和数据结构
@@ -38,6 +40,7 @@ Slot中有整个Pipeline的好处：
 - 有效提高资源利用率，如多个operator在同一个线程中完成
 
 ## sharedSlotGroup
+
 用户可以自由打开和关闭chaining，也可以指定从哪个Transformation开始进行Chaining操作，自由度很大。
 - sharedSlotGroup： 用户指定相同sharedslotgroup的Task会在同一个slot当中
 - colocationGroup：相同index的Task会在同一个slot中
@@ -49,9 +52,11 @@ Slot中有整个Pipeline的好处：
 availableSlotsPerJid用于记录JobVertexID与ResourceID的对应关系
 
 # Task的分配
+
 上文介绍了Slot的相关概念，此节则是需要通过调度，为Task分配具体的Slot，核心函数为getSlotForTask。
 调度逻辑是优先为JobVertex分配想要的Slot，没有想要的就随机分配Slot，可以local也可以是non-local。
 其中Instance对应TaskManager。
+
 ```java
 SimpleSlot getSlotForTask(JobVertexID vertexID, Iterable<Instance> locationPreferences) {
 		synchronized (lock) {
@@ -100,7 +105,8 @@ private SimpleSlot addSharedSlotAndAllocateSubSlot(
                 // can place a task into this slot.
                 boolean entryForNewJidExists = false;
                 
-                for (Map.Entry<AbstractID, Map<ResourceID, List<SharedSlot>>> entry : availableSlotsPerJid.entrySet()) {
+                for (Map.Entry<AbstractID, Map<ResourceID, List<SharedSlot>>> entry :
+                     availableSlotsPerJid.entrySet()) {
                     // there is already an entry for this groupID
                     if (entry.getKey().equals(groupIdForMap)) {
                         entryForNewJidExists = true;
@@ -108,12 +114,14 @@ private SimpleSlot addSharedSlotAndAllocateSubSlot(
                     }
 
                     Map<ResourceID, List<SharedSlot>> available = entry.getValue();
-                    putIntoMultiMap(available, location, sharedSlot); //对于其他的jobVertex，把sharedSlot加上去
+                    //对于其他的jobVertex，把sharedSlot加上去
+                    putIntoMultiMap(available, location, sharedSlot); 
                 }
 
                 // make sure an empty entry exists for this group, if no other entry exists
                 if (!entryForNewJidExists) { //如果存在参数中的groupId，那么就把它的slot信息清空
-                    availableSlotsPerJid.put(groupIdForMap, new LinkedHashMap<ResourceID, List<SharedSlot>>());
+                    availableSlotsPerJid.put(groupIdForMap, 
+                        new LinkedHashMap<ResourceID, List<SharedSlot>>());
                 }
 
                 return subSlot;
@@ -124,6 +132,7 @@ private SimpleSlot addSharedSlotAndAllocateSubSlot(
 ```
 
 ## Slot分配具体过程
+
 Flink调度包含两个重要的原则：
 - 同一个Operator的各个Subtask不能处于同一个SharedSlot，如FlatMap[1]和FlatMap[2]是不能在同一个SharedSlot中的
 - Flink分配Slot是按照拓扑排序从Source到Sink进行的。
@@ -136,8 +145,120 @@ Flink调度包含两个重要的原则：
 - 为Key->Sink[1]分配slot。目前两个SharedSlot都符合条件，从TaskManager1的SharedSlot中分配出一个SimpleSlot用来部署Key->Sink[1]。如上图中的⑥。
 - 为Key->Sink[2]分配slot。TaskManager1的SharedSlot中已经有同operator的Key->Sink[1]了，则只能选择另一个SharedSlot中分配出一个SimpleSlot用来部署Key->Sink[2]。如上图中的⑦。
 
-## JobManager组件
+## JobManager调度
 
+JM中主要包含以下组件：
+- BlobServer：用来管理二进制文件管理，如对用户上传的Jar会进行保存，TM可以从此下载用户Jar
+- InstanceManager：用于管理目前存活的TM组件，记录TM心跳信息
+- CompletedCheckpointStore：存储完成的Checkpoint信息
+- MemoryArchivist：保存提交的Flink作业相关信息，如JobGraph
+
+在启动JM后，会将Client传入的JobGraph转化成ExecutionGraph，ExecutionGraph会调用scheduleForExecution
+，并最终对Execution调用deploy方法进行执行。
+
+deploy方法会对每个ExecutionVertex分配Slot，并检查Slot所有TM状态，同时将当前Vertex状态变成deploying，
+接下来生成了一个TaskDeploymentDescriptor，然后交给taskManagerGateway.submitTask() 方法执行。
+后续的部分，就属于TaskManager的范畴了。
+
+
+
+```java
+/**
+	 * Deploys the execution to the previously assigned resource.
+	 *
+	 * @throws JobException if the execution cannot be deployed to the assigned resource
+	 */
+	public void deploy() throws JobException {
+		assertRunningInJobMasterMainThread();
+
+		final LogicalSlot slot  = assignedResource;
+
+		checkNotNull(slot, "In order to deploy the execution we first have to assign a resource via tryAssignResource.");
+
+		// Check if the TaskManager died in the meantime
+		// This only speeds up the response to TaskManagers failing concurrently to deployments.
+		// The more general check is the rpcTimeout of the deployment call
+		if (!slot.isAlive()) {
+			throw new JobException("Target slot (TaskManager) for deployment is no longer alive.");
+		}
+
+		// make sure exactly one deployment call happens from the correct state
+		// note: the transition from CREATED to DEPLOYING is for testing purposes only
+		ExecutionState previous = this.state;
+		if (previous == SCHEDULED || previous == CREATED) {
+			if (!transitionState(previous, DEPLOYING)) {
+				// race condition, someone else beat us to the deploying call.
+				// this should actually not happen and indicates a race somewhere else
+				throw new IllegalStateException("Cannot deploy task: Concurrent deployment call race.");
+			}
+		}
+		else {
+			// vertex may have been cancelled, or it was already scheduled
+			throw new IllegalStateException("The vertex must be in CREATED or SCHEDULED state to be deployed. Found state " + previous);
+		}
+
+		if (this != slot.getPayload()) {
+			throw new IllegalStateException(
+				String.format("The execution %s has not been assigned to the assigned slot.", this));
+		}
+
+		try {
+
+			// race double check, did we fail/cancel and do we need to release the slot?
+			if (this.state != DEPLOYING) {
+				slot.releaseSlot(new FlinkException("Actual state of execution " + this + " (" + state + ") does not match expected state DEPLOYING."));
+				return;
+			}
+
+			if (LOG.isInfoEnabled()) {
+				LOG.info(String.format("Deploying %s (attempt #%d) to %s", vertex.getTaskNameWithSubtaskIndex(),
+						attemptNumber, getAssignedResourceLocation()));
+			}
+
+			final TaskDeploymentDescriptor deployment = TaskDeploymentDescriptorFactory
+				.fromExecutionVertex(vertex, attemptNumber)
+				.createDeploymentDescriptor(
+					slot.getAllocationId(),
+					slot.getPhysicalSlotNumber(),
+					taskRestore,
+					producedPartitions.values());
+
+			// null taskRestore to let it be GC'ed
+			taskRestore = null;
+
+			final TaskManagerGateway taskManagerGateway = slot.getTaskManagerGateway();
+
+			final ComponentMainThreadExecutor jobMasterMainThreadExecutor =
+				vertex.getExecutionGraph().getJobMasterMainThreadExecutor();
+
+			// We run the submission in the future executor so that the serialization of large TDDs does not block
+			// the main thread and sync back to the main thread once submission is completed.
+			CompletableFuture.supplyAsync(() -> taskManagerGateway.submitTask(deployment, rpcTimeout), executor)
+				.thenCompose(Function.identity())
+				.whenCompleteAsync(
+					(ack, failure) -> {
+						// only respond to the failure case
+						if (failure != null) {
+							if (failure instanceof TimeoutException) {
+								String taskname = vertex.getTaskNameWithSubtaskIndex() + " (" + attemptId + ')';
+
+								markFailed(new Exception(
+									"Cannot deploy task " + taskname + " - TaskManager (" + getAssignedResourceLocation()
+										+ ") not responding after a rpcTimeout of " + rpcTimeout, failure));
+							} else {
+								markFailed(failure);
+							}
+						}
+					},
+					jobMasterMainThreadExecutor);
+
+		}
+		catch (Throwable t) {
+			markFailed(t);
+			ExceptionUtils.rethrow(t);
+		}
+	}
+```
 
 # Task的运行
 ## Task启动与状态管理
@@ -147,5 +268,9 @@ Flink调度包含两个重要的原则：
 - https://ci.apache.org/projects/flink/flink-docs-release-1.9/internals/job_scheduling.html
 - https://clay4444.github.io/posts/149d881d/
 - http://wuchong.me/blog/2016/05/09/flink-internals-understanding-execution-resources/
+- https://clay4444.github.io/posts/149d881d/
 - Slot类型：https://www.cnblogs.com/fxjwind/p/6703312.html
 - Slot分配：https://zhuanlan.zhihu.com/p/36525639
+
+若喜爱本文章，可关注公众号，方便获取更新信息。
+<img src="/assets/images/qrcode.jpg" />
