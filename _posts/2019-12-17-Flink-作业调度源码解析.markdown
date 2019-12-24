@@ -261,14 +261,78 @@ deploy方法会对每个ExecutionVertex分配Slot，并检查Slot所有TM状态�
 ```
 
 # Task的运行
+
+TaskManager是作业调度的基本单位，主要包含内存管理、IO管理和通信管理相关内容。
+
+- MemoryManager：管理着用于排序、哈希和缓存等操作所需要的内存。内存管理以Segment为基本单位，默认32k
+- IOManager：提供同步和异步两种写方式
+- NetworkEnvironment：网络通信组件，对中间结果或者数据交换的内容，不管保留在本地，还是传输给别的TM，
+都会经过NetworkBufferPool进行处理。
+
+其次我们需要明确Task的真正的逻辑：
+- 确认Slot资源
+- 连接JM/BlobServer
+- 反序列化算子
+- 收集Task信息
+- 创建新的Task
+
+## Task的生成
+
+在上文中的deploy方法中，创建了TaskDeploymentDescriptor，其中包含了执行时所需要的所有内容，如输入的InputGate和
+输出的ResultPartition。
+
+```java
+// create the reader and writer structures
+
+		final String taskNameWithSubtasksAndId =
+				Task.getTaskNameWithSubtaskAndID(taskName, subtaskIndex, parallelism, executionId);
+
+		List<ResultPartitionDeploymentDescriptor> partitions = tdd.getProducedPartitions();
+		List<InputGateDeploymentDescriptor> consumedPartitions = tdd.getInputGates();
+
+		// Produced intermediate result partitions
+		this.producedPartitions = new ResultPartition[partitions.size()];
+		this.writers = new ResultPartitionWriter[partitions.size()];
+
+		for (int i = 0; i < this.producedPartitions.length; i++) {
+			ResultPartitionDeploymentDescriptor desc = partitions.get(i);
+			ResultPartitionID partitionId = new ResultPartitionID(desc.getPartitionId(), executionId);
+
+			this.producedPartitions[i] = new ResultPartition(
+					taskNameWithSubtasksAndId,
+					jobId,
+					partitionId,
+					desc.getPartitionType(),
+					desc.getNumberOfSubpartitions(),
+					networkEnvironment.getPartitionManager(),
+					networkEnvironment.getPartitionConsumableNotifier(),
+					ioManager,
+					networkEnvironment.getDefaultIOMode());
+
+			this.writers[i] = new ResultPartitionWriter(this.producedPartitions[i]);
+		}
+
+		// Consumed intermediate result partitions
+		this.inputGates = new SingleInputGate[consumedPartitions.size()];
+		this.inputGatesById = new HashMap<IntermediateDataSetID, SingleInputGate>();
+
+		for (int i = 0; i < this.inputGates.length; i++) {
+			SingleInputGate gate = SingleInputGate.create(
+					taskNameWithSubtasksAndId, jobId, executionId, consumedPartitions.get(i), networkEnvironment);
+
+			this.inputGates[i] = gate;
+			inputGatesById.put(gate.getConsumedResultId(), gate);
+		}
+```
+最后生成一个可执行的线程，执行的内容为其自己，方便后续进行真正的执行。
+
 ## Task启动与状态管理
-## 数据如何交互
+
 
 参考
 - https://ci.apache.org/projects/flink/flink-docs-release-1.9/internals/job_scheduling.html
 - https://clay4444.github.io/posts/149d881d/
 - http://wuchong.me/blog/2016/05/09/flink-internals-understanding-execution-resources/
-- https://clay4444.github.io/posts/149d881d/
 - Slot类型：https://www.cnblogs.com/fxjwind/p/6703312.html
 - Slot分配：https://zhuanlan.zhihu.com/p/36525639
 
