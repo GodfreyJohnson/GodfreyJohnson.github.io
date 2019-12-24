@@ -60,75 +60,75 @@ availableSlotsPerJid用于记录JobVertexID与ResourceID的对应关系
 ```java
 SimpleSlot getSlotForTask(JobVertexID vertexID, Iterable<Instance> locationPreferences) {
 		synchronized (lock) {
-			Pair<SharedSlot, Locality> p = getSlotForTaskInternal(vertexID, locationPreferences, false);
+        Pair<SharedSlot, Locality> p = getSlotForTaskInternal(vertexID, locationPreferences, false);
 
-			if (p != null) {
-				SharedSlot ss = p.getLeft();
-				SimpleSlot slot = ss.allocateSubSlot(vertexID);
-				slot.setLocality(p.getRight());
-				return slot;
-			} else {
-				return null;
-			}
-		}
-	}
+        if (p != null) {
+            SharedSlot ss = p.getLeft();
+            SimpleSlot slot = ss.allocateSubSlot(vertexID);
+            slot.setLocality(p.getRight());
+            return slot;
+        } else {
+            return null;
+        }
+    }
+}
 
 private SimpleSlot addSharedSlotAndAllocateSubSlot(
             SharedSlot sharedSlot, Locality locality, JobVertexID groupId, CoLocationConstraint constraint) {
 
-        final ResourceID location = sharedSlot.getTaskManagerID();
+    final ResourceID location = sharedSlot.getTaskManagerID();
 
-        synchronized (lock) {
-            
-            SimpleSlot subSlot;
-            AbstractID groupIdForMap;
-            
-            // add to the total bookkeeping
-            if (!allSlots.add(sharedSlot)) { //加到allSlots中
-                throw new IllegalArgumentException("Slot was already contained in the assignment group");
-            }
-                    
-            if (constraint == null) {
-                // allocate us a sub slot to return
-                subSlot = sharedSlot.allocateSubSlot(groupId); //简单的allocate一个simpleSlot
-                groupIdForMap = groupId;
-            }
-            else { //如果有CoLocationConstraint
-                
-            }
-            
-            if (subSlot != null) {
-                // preserve the locality information
-                subSlot.setLocality(locality);
-                
-                // let the other groups know that this slot exists and that they
-                // can place a task into this slot.
-                boolean entryForNewJidExists = false;
-                
-                for (Map.Entry<AbstractID, Map<ResourceID, List<SharedSlot>>> entry :
-                     availableSlotsPerJid.entrySet()) {
-                    // there is already an entry for this groupID
-                    if (entry.getKey().equals(groupIdForMap)) {
-                        entryForNewJidExists = true;
-                        continue;
-                    }
-
-                    Map<ResourceID, List<SharedSlot>> available = entry.getValue();
-                    //对于其他的jobVertex，把sharedSlot加上去
-                    putIntoMultiMap(available, location, sharedSlot); 
-                }
-
-                // make sure an empty entry exists for this group, if no other entry exists
-                if (!entryForNewJidExists) { //如果存在参数中的groupId，那么就把它的slot信息清空
-                    availableSlotsPerJid.put(groupIdForMap, 
-                        new LinkedHashMap<ResourceID, List<SharedSlot>>());
-                }
-
-                return subSlot;
-            }
+    synchronized (lock) {
+        
+        SimpleSlot subSlot;
+        AbstractID groupIdForMap;
+        
+        // add to the total bookkeeping
+        if (!allSlots.add(sharedSlot)) { //加到allSlots中
+            throw new IllegalArgumentException("Slot was already contained in the assignment group");
         }
-        // end synchronized (lock)
+                
+        if (constraint == null) {
+            // allocate us a sub slot to return
+            subSlot = sharedSlot.allocateSubSlot(groupId); //简单的allocate一个simpleSlot
+            groupIdForMap = groupId;
+        }
+        else { //如果有CoLocationConstraint
+            
+        }
+        
+        if (subSlot != null) {
+            // preserve the locality information
+            subSlot.setLocality(locality);
+            
+            // let the other groups know that this slot exists and that they
+            // can place a task into this slot.
+            boolean entryForNewJidExists = false;
+            
+            for (Map.Entry<AbstractID, Map<ResourceID, List<SharedSlot>>> entry :
+                 availableSlotsPerJid.entrySet()) {
+                // there is already an entry for this groupID
+                if (entry.getKey().equals(groupIdForMap)) {
+                    entryForNewJidExists = true;
+                    continue;
+                }
+
+                Map<ResourceID, List<SharedSlot>> available = entry.getValue();
+                //对于其他的jobVertex，把sharedSlot加上去
+                putIntoMultiMap(available, location, sharedSlot); 
+            }
+
+            // make sure an empty entry exists for this group, if no other entry exists
+            if (!entryForNewJidExists) { //如果存在参数中的groupId，那么就把它的slot信息清空
+                availableSlotsPerJid.put(groupIdForMap, 
+                    new LinkedHashMap<ResourceID, List<SharedSlot>>());
+            }
+
+            return subSlot;
+        }
     }
+    // end synchronized (lock)
+}
 ```
 
 ## Slot分配具体过程
@@ -164,100 +164,100 @@ deploy方法会对每个ExecutionVertex分配Slot，并检查Slot所有TM状态�
 
 ```java
 /**
-	 * Deploys the execution to the previously assigned resource.
-	 *
-	 * @throws JobException if the execution cannot be deployed to the assigned resource
-	 */
-	public void deploy() throws JobException {
-		assertRunningInJobMasterMainThread();
+ * Deploys the execution to the previously assigned resource.
+ *
+ * @throws JobException if the execution cannot be deployed to the assigned resource
+ */
+public void deploy() throws JobException {
+    assertRunningInJobMasterMainThread();
 
-		final LogicalSlot slot  = assignedResource;
+    final LogicalSlot slot  = assignedResource;
 
-		checkNotNull(slot, "In order to deploy the execution we first have to assign a resource via tryAssignResource.");
+    checkNotNull(slot, "In order to deploy the execution we first have to assign a resource via tryAssignResource.");
 
-		// Check if the TaskManager died in the meantime
-		// This only speeds up the response to TaskManagers failing concurrently to deployments.
-		// The more general check is the rpcTimeout of the deployment call
-		if (!slot.isAlive()) {
-			throw new JobException("Target slot (TaskManager) for deployment is no longer alive.");
-		}
+    // Check if the TaskManager died in the meantime
+    // This only speeds up the response to TaskManagers failing concurrently to deployments.
+    // The more general check is the rpcTimeout of the deployment call
+    if (!slot.isAlive()) {
+        throw new JobException("Target slot (TaskManager) for deployment is no longer alive.");
+    }
 
-		// make sure exactly one deployment call happens from the correct state
-		// note: the transition from CREATED to DEPLOYING is for testing purposes only
-		ExecutionState previous = this.state;
-		if (previous == SCHEDULED || previous == CREATED) {
-			if (!transitionState(previous, DEPLOYING)) {
-				// race condition, someone else beat us to the deploying call.
-				// this should actually not happen and indicates a race somewhere else
-				throw new IllegalStateException("Cannot deploy task: Concurrent deployment call race.");
-			}
-		}
-		else {
-			// vertex may have been cancelled, or it was already scheduled
-			throw new IllegalStateException("The vertex must be in CREATED or SCHEDULED state to be deployed. Found state " + previous);
-		}
+    // make sure exactly one deployment call happens from the correct state
+    // note: the transition from CREATED to DEPLOYING is for testing purposes only
+    ExecutionState previous = this.state;
+    if (previous == SCHEDULED || previous == CREATED) {
+        if (!transitionState(previous, DEPLOYING)) {
+            // race condition, someone else beat us to the deploying call.
+            // this should actually not happen and indicates a race somewhere else
+            throw new IllegalStateException("Cannot deploy task: Concurrent deployment call race.");
+        }
+    }
+    else {
+        // vertex may have been cancelled, or it was already scheduled
+        throw new IllegalStateException("The vertex must be in CREATED or SCHEDULED state to be deployed. Found state " + previous);
+    }
 
-		if (this != slot.getPayload()) {
-			throw new IllegalStateException(
-				String.format("The execution %s has not been assigned to the assigned slot.", this));
-		}
+    if (this != slot.getPayload()) {
+        throw new IllegalStateException(
+            String.format("The execution %s has not been assigned to the assigned slot.", this));
+    }
 
-		try {
+    try {
 
-			// race double check, did we fail/cancel and do we need to release the slot?
-			if (this.state != DEPLOYING) {
-				slot.releaseSlot(new FlinkException("Actual state of execution " + this + " (" + state + ") does not match expected state DEPLOYING."));
-				return;
-			}
+        // race double check, did we fail/cancel and do we need to release the slot?
+        if (this.state != DEPLOYING) {
+            slot.releaseSlot(new FlinkException("Actual state of execution " + this + " (" + state + ") does not match expected state DEPLOYING."));
+            return;
+        }
 
-			if (LOG.isInfoEnabled()) {
-				LOG.info(String.format("Deploying %s (attempt #%d) to %s", vertex.getTaskNameWithSubtaskIndex(),
-						attemptNumber, getAssignedResourceLocation()));
-			}
+        if (LOG.isInfoEnabled()) {
+            LOG.info(String.format("Deploying %s (attempt #%d) to %s", vertex.getTaskNameWithSubtaskIndex(),
+                    attemptNumber, getAssignedResourceLocation()));
+        }
 
-			final TaskDeploymentDescriptor deployment = TaskDeploymentDescriptorFactory
-				.fromExecutionVertex(vertex, attemptNumber)
-				.createDeploymentDescriptor(
-					slot.getAllocationId(),
-					slot.getPhysicalSlotNumber(),
-					taskRestore,
-					producedPartitions.values());
+        final TaskDeploymentDescriptor deployment = TaskDeploymentDescriptorFactory
+            .fromExecutionVertex(vertex, attemptNumber)
+            .createDeploymentDescriptor(
+                slot.getAllocationId(),
+                slot.getPhysicalSlotNumber(),
+                taskRestore,
+                producedPartitions.values());
 
-			// null taskRestore to let it be GC'ed
-			taskRestore = null;
+        // null taskRestore to let it be GC'ed
+        taskRestore = null;
 
-			final TaskManagerGateway taskManagerGateway = slot.getTaskManagerGateway();
+        final TaskManagerGateway taskManagerGateway = slot.getTaskManagerGateway();
 
-			final ComponentMainThreadExecutor jobMasterMainThreadExecutor =
-				vertex.getExecutionGraph().getJobMasterMainThreadExecutor();
+        final ComponentMainThreadExecutor jobMasterMainThreadExecutor =
+            vertex.getExecutionGraph().getJobMasterMainThreadExecutor();
 
-			// We run the submission in the future executor so that the serialization of large TDDs does not block
-			// the main thread and sync back to the main thread once submission is completed.
-			CompletableFuture.supplyAsync(() -> taskManagerGateway.submitTask(deployment, rpcTimeout), executor)
-				.thenCompose(Function.identity())
-				.whenCompleteAsync(
-					(ack, failure) -> {
-						// only respond to the failure case
-						if (failure != null) {
-							if (failure instanceof TimeoutException) {
-								String taskname = vertex.getTaskNameWithSubtaskIndex() + " (" + attemptId + ')';
+        // We run the submission in the future executor so that the serialization of large TDDs does not block
+        // the main thread and sync back to the main thread once submission is completed.
+        CompletableFuture.supplyAsync(() -> taskManagerGateway.submitTask(deployment, rpcTimeout), executor)
+            .thenCompose(Function.identity())
+            .whenCompleteAsync(
+                (ack, failure) -> {
+                    // only respond to the failure case
+                    if (failure != null) {
+                        if (failure instanceof TimeoutException) {
+                            String taskname = vertex.getTaskNameWithSubtaskIndex() + " (" + attemptId + ')';
 
-								markFailed(new Exception(
-									"Cannot deploy task " + taskname + " - TaskManager (" + getAssignedResourceLocation()
-										+ ") not responding after a rpcTimeout of " + rpcTimeout, failure));
-							} else {
-								markFailed(failure);
-							}
-						}
-					},
-					jobMasterMainThreadExecutor);
+                            markFailed(new Exception(
+                                "Cannot deploy task " + taskname + " - TaskManager (" + getAssignedResourceLocation()
+                                    + ") not responding after a rpcTimeout of " + rpcTimeout, failure));
+                        } else {
+                            markFailed(failure);
+                        }
+                    }
+                },
+                jobMasterMainThreadExecutor);
 
-		}
-		catch (Throwable t) {
-			markFailed(t);
-			ExceptionUtils.rethrow(t);
-		}
-	}
+    }
+    catch (Throwable t) {
+        markFailed(t);
+        ExceptionUtils.rethrow(t);
+    }
+}
 ```
 
 # Task的运行
@@ -284,52 +284,256 @@ TaskManager是作业调度的基本单位，主要包含内存管理、IO管理�
 ```java
 // create the reader and writer structures
 
-		final String taskNameWithSubtasksAndId =
-				Task.getTaskNameWithSubtaskAndID(taskName, subtaskIndex, parallelism, executionId);
+final String taskNameWithSubtasksAndId =
+        Task.getTaskNameWithSubtaskAndID(taskName, subtaskIndex, parallelism, executionId);
 
-		List<ResultPartitionDeploymentDescriptor> partitions = tdd.getProducedPartitions();
-		List<InputGateDeploymentDescriptor> consumedPartitions = tdd.getInputGates();
+List<ResultPartitionDeploymentDescriptor> partitions = tdd.getProducedPartitions();
+List<InputGateDeploymentDescriptor> consumedPartitions = tdd.getInputGates();
 
-		// Produced intermediate result partitions
-		this.producedPartitions = new ResultPartition[partitions.size()];
-		this.writers = new ResultPartitionWriter[partitions.size()];
+// Produced intermediate result partitions
+this.producedPartitions = new ResultPartition[partitions.size()];
+this.writers = new ResultPartitionWriter[partitions.size()];
 
-		for (int i = 0; i < this.producedPartitions.length; i++) {
-			ResultPartitionDeploymentDescriptor desc = partitions.get(i);
-			ResultPartitionID partitionId = new ResultPartitionID(desc.getPartitionId(), executionId);
+for (int i = 0; i < this.producedPartitions.length; i++) {
+    ResultPartitionDeploymentDescriptor desc = partitions.get(i);
+    ResultPartitionID partitionId = new ResultPartitionID(desc.getPartitionId(), executionId);
 
-			this.producedPartitions[i] = new ResultPartition(
-					taskNameWithSubtasksAndId,
-					jobId,
-					partitionId,
-					desc.getPartitionType(),
-					desc.getNumberOfSubpartitions(),
-					networkEnvironment.getPartitionManager(),
-					networkEnvironment.getPartitionConsumableNotifier(),
-					ioManager,
-					networkEnvironment.getDefaultIOMode());
+    this.producedPartitions[i] = new ResultPartition(
+            taskNameWithSubtasksAndId,
+            jobId,
+            partitionId,
+            desc.getPartitionType(),
+            desc.getNumberOfSubpartitions(),
+            networkEnvironment.getPartitionManager(),
+            networkEnvironment.getPartitionConsumableNotifier(),
+            ioManager,
+            networkEnvironment.getDefaultIOMode());
 
-			this.writers[i] = new ResultPartitionWriter(this.producedPartitions[i]);
-		}
+    this.writers[i] = new ResultPartitionWriter(this.producedPartitions[i]);
+}
 
-		// Consumed intermediate result partitions
-		this.inputGates = new SingleInputGate[consumedPartitions.size()];
-		this.inputGatesById = new HashMap<IntermediateDataSetID, SingleInputGate>();
+// Consumed intermediate result partitions
+this.inputGates = new SingleInputGate[consumedPartitions.size()];
+this.inputGatesById = new HashMap<IntermediateDataSetID, SingleInputGate>();
 
-		for (int i = 0; i < this.inputGates.length; i++) {
-			SingleInputGate gate = SingleInputGate.create(
-					taskNameWithSubtasksAndId, jobId, executionId, consumedPartitions.get(i), networkEnvironment);
+for (int i = 0; i < this.inputGates.length; i++) {
+    SingleInputGate gate = SingleInputGate.create(
+            taskNameWithSubtasksAndId, jobId, executionId, consumedPartitions.get(i), networkEnvironment);
 
-			this.inputGates[i] = gate;
-			inputGatesById.put(gate.getConsumedResultId(), gate);
-		}
+    this.inputGates[i] = gate;
+    inputGatesById.put(gate.getConsumedResultId(), gate);
+}
 ```
 最后生成一个可执行的线程，执行的内容为其自己，方便后续进行真正的执行。
 
 ## Task启动与状态管理
 
+- 在flink当中，多处都使用了while(true)来对状态进行不断的更新
+- 初始化类加载器，并用此类加载器加载对应的代码
+- 是向网络管理器注册当前任务，为输入InputGate和输出Partition都创建BufferPool
+- 获取需要的缓存文件
+- 准备任务运行的环境，并对任务的状态进行恢复，如重启失败的任务
+- 通知大家状态变成了Running
+- 真正运行任务
+- 任务结束后的处理
 
-参考
+```java 
+/**
+ * The core work method that bootstraps the task and executes it code
+ */
+@Override
+public void run() {
+
+    // ----------------------------
+    //  更新Task的状态
+    // ----------------------------
+    while (true) {
+        ExecutionState current = this.executionState;
+        if (current == ExecutionState.CREATED) {
+            if (STATE_UPDATER.compareAndSet(this, ExecutionState.CREATED, ExecutionState.DEPLOYING)) {
+                // success, we can start our work
+                break;
+            }
+        }
+        else if (current == ExecutionState.FAILED) {
+            // we were immediately failed. tell the TaskManager that we reached our final state
+            notifyFinalState();
+            return;
+        }
+        else if (current == ExecutionState.CANCELING) {
+            if (STATE_UPDATER.compareAndSet(this, ExecutionState.CANCELING, ExecutionState.CANCELED)) {
+                // we were immediately canceled. tell the TaskManager that we reached our final state
+                notifyFinalState();
+                return;
+            }
+        }
+        else {
+            throw new IllegalStateException("Invalid state for beginning of task operation");
+        }
+    }
+
+    // all resource acquisitions and registrations from here on
+    // need to be undone in the end
+    Map<String, Future<Path>> distributedCacheEntries = new HashMap<String, Future<Path>>();
+    AbstractInvokable invokable = null;
+
+    try {
+        // ----------------------------
+        //  Task Bootstrap - We periodically 
+        //  check for canceling as a shortcut
+        // ----------------------------
+
+        // first of all, get a user-code classloader，创建用户的类加载器
+        // this may involve downloading the job's JAR files and/or classes
+        LOG.info("Loading JAR files for task " + taskNameWithSubtask);
+        final ClassLoader userCodeClassLoader = createUserCodeClassloader(libraryCache);
+
+        // now load the task's invokable code，用此类加载器加载对应的代码，通过反射生成可执行抽象
+        invokable = loadAndInstantiateInvokable(userCodeClassLoader, nameOfInvokableClass);
+
+        if (isCanceledOrFailed()) {
+            throw new CancelTaskException();
+        }
+
+        // ----------------------------------------------------------------
+        // register the task with the network stack
+        // this operation may fail if the system does not have enough
+        // memory to run the necessary data exchanges
+        // the registration must also strictly be undone
+        // ----------------------------------------------------------------
+
+        // 向网络管理器注册当前任务，为输入InputGate和输出Partition都创建BufferPool
+        LOG.info("Registering task at network: " + this);
+        network.registerTask(this);
+
+        // next, kick off the background copying of files for the distributed cache
+        // 获取需要的缓存文件
+        try {
+            for (Map.Entry<String, DistributedCache.DistributedCacheEntry> entry :
+                    DistributedCache.readFileInfoFromConfig(jobConfiguration))
+            {
+                LOG.info("Obtaining local cache file for '" + entry.getKey() + '\'');
+                Future<Path> cp = fileCache.createTmpFile(entry.getKey(), entry.getValue(), jobId);
+                distributedCacheEntries.put(entry.getKey(), cp);
+            }
+        }
+        catch (Exception e) {
+            throw new Exception("Exception while adding files to distributed cache.", e);
+        }
+
+        if (isCanceledOrFailed()) {
+            throw new CancelTaskException();
+        }
+
+        // ----------------------------------------------------------------
+        //  call the user code initialization methods，准备好运行环境
+        // ----------------------------------------------------------------
+
+        TaskInputSplitProvider splitProvider = new TaskInputSplitProvider(jobManager,
+                jobId, vertexId, executionId, userCodeClassLoader, actorAskTimeout);
+
+        Environment env = new RuntimeEnvironment(jobId, vertexId, executionId,
+                taskName, taskNameWithSubtask, subtaskIndex, parallelism,
+                jobConfiguration, taskConfiguration,
+                userCodeClassLoader, memoryManager, ioManager,
+                broadcastVariableManager, accumulatorRegistry,
+                splitProvider, distributedCacheEntries,
+                writers, inputGates, jobManager, taskManagerConfig);
+
+        // let the task code create its readers and writers
+        invokable.setEnvironment(env);
+        try {
+            invokable.registerInputOutput();
+        }
+        catch (Exception e) {
+            throw new Exception("Call to registerInputOutput() of invokable failed", e);
+        }
+
+        // the very last thing before the actual execution starts running is to inject
+        // the state into the task. the state is non-empty if this is an execution
+        // of a task that failed but had backuped state from a checkpoint
+        // 对任务的状态进行恢复
+        // get our private reference onto the stack (be safe against concurrent changes) 
+        SerializedValue<StateHandle<?>> operatorState = this.operatorState;
+
+        if (operatorState != null) {
+            if (invokable instanceof StatefulTask) {
+                try {
+                    StateHandle<?> state = operatorState.deserializeValue(userCodeClassLoader);
+                    StatefulTask<?> op = (StatefulTask<?>) invokable;
+                    StateUtils.setOperatorState(op, state);
+                }
+                catch (Exception e) {
+                    throw new RuntimeException("Failed to deserialize state handle and setup initial operator state.", e);
+                }
+            }
+            else {
+                throw new IllegalStateException("Found operator state for a non-stateful task invokable");
+            }
+        }
+
+        // be memory and GC friendly - since the code stays in invoke() for a potentially long time,
+        // we clear the reference to the state handle
+        //noinspection UnusedAssignment
+        operatorState = null;
+        this.operatorState = null;
+
+        // ----------------------------------------------------------------
+        //  actual task core work，真正运行任务
+        // ----------------------------------------------------------------
+
+        // we must make strictly sure that the invokable is accessible to the cancel() call
+        // by the time we switched to running.
+        this.invokable = invokable;
+
+        // switch to the RUNNING state, if that fails, we have been canceled/failed in the meantime
+        if (!STATE_UPDATER.compareAndSet(this, ExecutionState.DEPLOYING, ExecutionState.RUNNING)) {
+            throw new CancelTaskException();
+        }
+
+        // notify everyone that we switched to running. especially the TaskManager needs，给大家发通知
+        // to know this!
+        notifyObservers(ExecutionState.RUNNING, null);
+        taskManager.tell(new UpdateTaskExecutionState(
+                new TaskExecutionState(jobId, executionId, ExecutionState.RUNNING)));
+
+        // make sure the user code classloader is accessible thread-locally
+        executingThread.setContextClassLoader(userCodeClassLoader);
+
+        // run the invokable
+        invokable.invoke();
+
+        // make sure, we enter the catch block if the task leaves the invoke() method due
+        // to the fact that it has been canceled
+        if (isCanceledOrFailed()) {
+            throw new CancelTaskException();
+        }
+
+        // ----------------------------------------------------------------
+        //  finalization of a successful execution，任务结束
+        // ----------------------------------------------------------------
+
+        // finish the produced partitions. if this fails, we consider the execution failed.
+        for (ResultPartition partition : producedPartitions) {
+            if (partition != null) {
+                partition.finish();
+            }
+        }
+
+        // try to mark the task as finished
+        // if that fails, the task was canceled/failed in the meantime
+        if (STATE_UPDATER.compareAndSet(this, ExecutionState.RUNNING, ExecutionState.FINISHED)) {
+            notifyObservers(ExecutionState.FINISHED, null);
+        }
+        else {
+            throw new CancelTaskException();
+        }
+    }
+}
+
+```
+
+# 参考
 - https://ci.apache.org/projects/flink/flink-docs-release-1.9/internals/job_scheduling.html
 - https://clay4444.github.io/posts/149d881d/
 - http://wuchong.me/blog/2016/05/09/flink-internals-understanding-execution-resources/
