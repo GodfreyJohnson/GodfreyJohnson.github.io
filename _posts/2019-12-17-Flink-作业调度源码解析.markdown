@@ -51,9 +51,351 @@ Slot中有整个Pipeline的好处：
 - SlotSharingGroupAssignment：用于管理许多SharedSlots，其中的allSlots变量用于保存所有SharedSlot，
 availableSlotsPerJid用于记录JobVertexID与ResourceID的对应关系
 
-# Task的分配
+# Slot的注册与分配
 
-上文介绍了Slot的相关概念，此节则是需要通过调度，为Task分配具体的Slot，核心函数为getSlotForTask。
+上文介绍了Slot的相关概念，此节是对Slot的注册与分配流程进行介绍。
+
+## Slot的注册
+
+当新的Instance/TM向JM注册时，可能会出现多个TM同时进行注册，为了避免出现竞态条件，因此需要申请schduler的锁。
+同时为了避免死锁，使用了异步注册的方法。
+
+再通过handleNewSlot方法，将Instance上的Slot指定具体的Task，Task会从taskQueue取出，如果此时没有需要执行的Task，
+则将Instance放到instancesWithAvailableResources中。
+```java
+public void newSlotAvailable(final Instance instance) {
+		
+    // WARNING: The asynchrony here is necessary, because  we cannot guarantee the order
+    // of lock acquisition (global scheduler, instance) and otherwise lead to potential deadlocks:
+    // 
+    // -> The scheduler needs to grab them (1) global scheduler lock
+    //                                     (2) slot/instance lock
+    // -> The slot releasing grabs (1) slot/instance (for releasing) and
+    //                             (2) scheduler (to check whether to take a new task item
+    // 
+    // that leads with a high probability to deadlocks, when scheduling fast
+
+    this.newlyAvailableInstances.add(instance);
+
+    Futures.future(new Callable<Object>() {
+        @Override
+        public Object call() throws Exception {
+            handleNewSlot();
+            return null;
+        }
+    }, executionContext);
+}
+
+private void handleNewSlot() {		
+    synchronized (globalLock) {
+        Instance instance = this.newlyAvailableInstances.poll();
+        if (instance == null || !instance.hasResourcesAvailable()) {
+            // someone else took it
+            return;
+        }
+        
+        QueuedTask queued = taskQueue.peek();
+        
+        // the slot was properly released, we can allocate a new one from that instance
+        
+        if (queued != null) {
+            ScheduledUnit task = queued.getTask();
+            ExecutionVertex vertex = task.getTaskToExecute().getVertex();
+            
+            try {
+                SimpleSlot newSlot = instance.allocateSimpleSlot(vertex.getJobId());
+                if (newSlot != null) {
+                    
+                    // success, remove from the task queue and notify the future
+                    taskQueue.poll();
+                    if (queued.getFuture() != null) {
+                        try {
+                            queued.getFuture().setSlot(newSlot);
+                        }
+                        catch (Throwable t) {
+                            LOG.error("Error calling allocation future for task " + vertex.getSimpleName(), t);
+                            task.getTaskToExecute().fail(t);
+                        }
+                    }
+                }
+            }
+            catch (InstanceDiedException e) {
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Instance " + instance + " was marked dead asynchronously.");
+                }
+                
+                removeInstance(instance);
+            }
+        }
+        else {
+            this.instancesWithAvailableResources.add(instance);
+        }
+    }
+}
+```
+
+instancesWithAvailableResources会在scheduleTask进行使用。
+- 首先会拿到任务的SlotSharingGroup，其中可以让多个任务可以放到一个Slot中执行
+- 若有SlotSharingGroup，则在Constraint限制下(同一个任务的子任务不在相同Slot运行)，为其分配SimpleSlot
+- 若不存在SlotSharingGroup，则申请一个SimpleSlot，若没有资源则加入等待队列
+- location preferences是由其上游任务所在的位置决定，具体的位置即所在的TM，每个JobVertex对应一个Group
+
+```java
+/**
+ * Returns either a {@link org.apache.flink.runtime.instance.SimpleSlot}, or a {@link SlotAllocationFuture}.
+ */
+private Object scheduleTask(ScheduledUnit task, boolean queueIfNoResource) throws NoResourceAvailableException {
+    if (task == null) {
+        throw new NullPointerException();
+    }
+    if (LOG.isDebugEnabled()) {
+        LOG.debug("Scheduling task " + task);
+    }
+
+    final ExecutionVertex vertex = task.getTaskToExecute().getVertex();
+    
+    final Iterable<Instance> preferredLocations = vertex.getPreferredLocations();
+    final boolean forceExternalLocation = vertex.isScheduleLocalOnly() &&
+                                preferredLocations != null && preferredLocations.iterator().hasNext();
+
+    synchronized (globalLock) {
+        
+        SlotSharingGroup sharingUnit = task.getSlotSharingGroup();
+        
+        if (sharingUnit != null) {
+
+            // 1)  === If the task has a slot sharing group, schedule with shared slots ===
+            
+            if (queueIfNoResource) {
+                throw new IllegalArgumentException(
+                        "A task with a vertex sharing group was scheduled in a queued fashion.");
+            }
+            
+            final SlotSharingGroupAssignment assignment = sharingUnit.getTaskAssignment();
+            final CoLocationConstraint constraint = task.getLocationConstraint();
+            
+            // sanity check that we do not use an externally forced location and a co-location constraint together
+            if (constraint != null && forceExternalLocation) {
+                throw new IllegalArgumentException("The scheduling cannot be constrained simultaneously by a "
+                        + "co-location constraint and an external location constraint.");
+            }
+            
+            // get a slot from the group, if the group has one for us (and can fulfill the constraint)
+            final SimpleSlot slotFromGroup;
+            if (constraint == null) {
+                slotFromGroup = assignment.getSlotForTask(vertex);
+            }
+            else {
+                slotFromGroup = assignment.getSlotForTask(vertex, constraint);
+            }
+
+            SimpleSlot newSlot = null;
+            SimpleSlot toUse = null;
+
+            // the following needs to make sure any allocated slot is released in case of an error
+            try {
+                
+                // check whether the slot from the group is already what we want.
+                // any slot that is local, or where the assignment was unconstrained is good!
+                if (slotFromGroup != null && slotFromGroup.getLocality() != Locality.NON_LOCAL) {
+                    
+                    // if this is the first slot for the co-location constraint, we lock
+                    // the location, because we are quite happy with the slot
+                    if (constraint != null && !constraint.isAssigned()) {
+                        constraint.lockLocation();
+                    }
+                    
+                    updateLocalityCounters(slotFromGroup, vertex);
+                    return slotFromGroup;
+                }
+                
+                // the group did not have a local slot for us. see if we can one (or a better one)
+                
+                // our location preference is either determined by the location constraint, or by the
+                // vertex's preferred locations
+                final Iterable<Instance> locations;
+                final boolean localOnly;
+                if (constraint != null && constraint.isAssigned()) {
+                    locations = Collections.singleton(constraint.getLocation());
+                    localOnly = true;
+                }
+                else {
+                    locations = vertex.getPreferredLocations();
+                    localOnly = forceExternalLocation;
+                }
+                
+                newSlot = getNewSlotForSharingGroup(vertex, locations, assignment, constraint, localOnly);
+
+                if (newSlot == null) {
+                    if (slotFromGroup == null) {
+                        // both null, which means there is nothing available at all
+                        
+                        if (constraint != null && constraint.isAssigned()) {
+                            // nothing is available on the node where the co-location constraint forces us to
+                            throw new NoResourceAvailableException("Could not allocate a slot on instance " +
+                                    constraint.getLocation() + ", as required by the co-location constraint.");
+                        }
+                        else if (forceExternalLocation) {
+                            // could not satisfy the external location constraint
+                            String hosts = getHostnamesFromInstances(preferredLocations);
+                            throw new NoResourceAvailableException("Could not schedule task " + vertex
+                                    + " to any of the required hosts: " + hosts);
+                        }
+                        else {
+                            // simply nothing is available
+                            throw new NoResourceAvailableException(task, getNumberOfAvailableInstances(),
+                                    getTotalNumberOfSlots(), getNumberOfAvailableSlots());
+                        }
+                    }
+                    else {
+                        // got a non-local from the group, and no new one, so we use the non-local
+                        // slot from the sharing group
+                        toUse = slotFromGroup;
+                    }
+                }
+                else if (slotFromGroup == null || !slotFromGroup.isAlive() || newSlot.getLocality() == Locality.LOCAL) {
+                    // if there is no slot from the group, or the new slot is local,
+                    // then we use the new slot
+                    if (slotFromGroup != null) {
+                        slotFromGroup.releaseSlot();
+                    }
+                    toUse = newSlot;
+                }
+                else {
+                    // both are available and usable. neither is local. in that case, we may
+                    // as well use the slot from the sharing group, to minimize the number of
+                    // instances that the job occupies
+                    newSlot.releaseSlot();
+                    toUse = slotFromGroup;
+                }
+
+                // if this is the first slot for the co-location constraint, we lock
+                // the location, because we are going to use that slot
+                if (constraint != null && !constraint.isAssigned()) {
+                    constraint.lockLocation();
+                }
+                
+                updateLocalityCounters(toUse, vertex);
+            }
+            catch (NoResourceAvailableException e) {
+                throw e;
+            }
+            catch (Throwable t) {
+                if (slotFromGroup != null) {
+                    slotFromGroup.releaseSlot();
+                }
+                if (newSlot != null) {
+                    newSlot.releaseSlot();
+                }
+
+                ExceptionUtils.rethrow(t, "An error occurred while allocating a slot in a sharing group");
+            }
+
+            return toUse;
+        }
+        else {
+            
+            // 2) === schedule without hints and sharing ===
+            
+            SimpleSlot slot = getFreeSlotForTask(vertex, preferredLocations, forceExternalLocation);
+            if (slot != null) {
+                updateLocalityCounters(slot, vertex);
+                return slot;
+            }
+            else {
+                // no resource available now, so queue the request
+                if (queueIfNoResource) {
+                    SlotAllocationFuture future = new SlotAllocationFuture();
+                    this.taskQueue.add(new QueuedTask(task, future));
+                    return future;
+                }
+                else if (forceExternalLocation) {
+                    String hosts = getHostnamesFromInstances(preferredLocations);
+                    throw new NoResourceAvailableException("Could not schedule task " + vertex
+                            + " to any of the required hosts: " + hosts);
+                }
+                else {
+                    throw new NoResourceAvailableException(getNumberOfAvailableInstances(),
+                            getTotalNumberOfSlots(), getNumberOfAvailableSlots());
+                }
+            }
+        }
+    }
+}
+```
+
+getSlotForTask内部会调用getSlotForTaskInternal方法
+- 先判断jobvertex对应的group是否存在
+- 不存在则进行创建，并把当前所有的slot都当做其可用的slot
+- 若存在则优先分配prefered location
+
+```java
+private Pair<SharedSlot, Locality> getSlotForTaskInternal(AbstractID groupId,
+                                                            Iterable<Instance> preferredLocations,
+                                                            boolean localOnly)
+{
+    // check if there is anything at all in this group assignment
+    if (allSlots.isEmpty()) {
+        return null;
+    }
+
+    // get the available slots for the group
+    Map<Instance, List<SharedSlot>> slotsForGroup = availableSlotsPerJid.get(groupId);
+    
+    if (slotsForGroup == null) {
+        // we have a new group, so all slots are available
+        slotsForGroup = new LinkedHashMap<Instance, List<SharedSlot>>();
+        availableSlotsPerJid.put(groupId, slotsForGroup);
+
+        for (SharedSlot availableSlot : allSlots) {
+            putIntoMultiMap(slotsForGroup, availableSlot.getInstance(), availableSlot);
+        }
+    }
+    else if (slotsForGroup.isEmpty()) {
+        // the group exists, but nothing is available for that group
+        return null;
+    }
+
+    // check whether we can schedule the task to a preferred location
+    boolean didNotGetPreferred = false;
+
+    if (preferredLocations != null) {
+        for (Instance location : preferredLocations) {
+
+            // set the flag that we failed a preferred location. If one will be found,
+            // we return early anyways and skip the flag evaluation
+            didNotGetPreferred = true;
+
+            SharedSlot slot = removeFromMultiMap(slotsForGroup, location);
+            if (slot != null && slot.isAlive()) {
+                return new ImmutablePair<SharedSlot, Locality>(slot, Locality.LOCAL);
+            }
+        }
+    }
+
+    // if we want only local assignments, exit now with a "not found" result
+    if (didNotGetPreferred && localOnly) {
+        return null;
+    }
+
+    Locality locality = didNotGetPreferred ? Locality.NON_LOCAL : Locality.UNCONSTRAINED;
+
+    // schedule the task to any available location
+    SharedSlot slot;
+    while ((slot = pollFromMultiMap(slotsForGroup)) != null) {
+        if (slot.isAlive()) {
+            return new ImmutablePair<SharedSlot, Locality>(slot, locality);
+        }
+    }
+    
+    // nothing available after all, all slots were dead
+    return null;
+}
+```
+
+## Slot的分配
+
+接下来介绍如何为Task分配具体的Slot，其核心函数为getSlotForTask。
 调度逻辑是优先为JobVertex分配想要的Slot，没有想要的就随机分配Slot，可以local也可以是non-local。
 其中Instance对应TaskManager。
 
